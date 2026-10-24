@@ -1,0 +1,52 @@
+# Two networks:
+#   public   - the proxy's "internet side"; port 80 of the host is published here.
+#   internal - a private network with no route to the outside world.
+#
+# The legacy service (httpbin) is attached ONLY to "internal" and publishes no
+# ports, so the one way to reach it from outside is through the proxy.
+#
+#   client --:80--> proxy (public + internal) --:8081--> httpbin (internal only)
+
+name: http-hands-on # fixed project name -> networks are http-hands-on_public / _internal
+
+services:
+  proxy:
+    build: ./proxy
+    ports:
+      - "80:8080" # host port 80 -> proxy container port 8080
+    environment:
+      LISTEN_ADDR: ":8080"
+      UPSTREAM_URL: "http://httpbin:8081" # Docker DNS resolves the service name
+      JWT_SECRET: "${JWT_SECRET:?JWT_SECRET is not set - create .env as shown in README (openssl rand -base64 48)}"
+      JWT_ISSUER: "jwt-proxy"
+      JWT_AUDIENCE: "legacy-httpbin"
+      TOKEN_TTL: "15m"
+      USERS_FILE: "/etc/jwt-proxy/users.json"
+    volumes:
+      - ./config/users.json:/etc/jwt-proxy/users.json:ro
+    networks:
+      - public
+      - internal
+    depends_on:
+      - httpbin
+    restart: unless-stopped
+    read_only: true # the proxy never writes to disk
+    cap_drop: [ALL] # needs no Linux capabilities
+    security_opt: ["no-new-privileges:true"]
+
+  httpbin: # the "legacy" service: it has no authentication of its own
+    image: ghcr.io/mccutchen/go-httpbin:latest
+    environment:
+      PORT: "8081"
+    # No "ports:" on purpose: nothing is published on the host.
+    networks:
+      - internal
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+
+networks:
+  public: {}
+  internal:
+    internal: true # Docker creates no gateway: no traffic to or from outside
